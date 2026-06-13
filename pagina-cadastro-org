@@ -273,7 +273,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     <p class="kicker">Últimas vagas</p>
     <h2>Aprenda a tocar suas primeiras notas no acordeon e <span class="grn">se torne um gaiteiro</span></h2>
     <p>Conheça o passo a passo para se tornar um acordeonista mesmo que esteja começando do zero. 100% gratuito, ao vivo no YouTube, de 13 a 15 de Julho às 20h.</p>
-    <div class="formcard">
+    <div class="formcard" id="form-final">
       <h3 style="color:var(--navy)">Garanta sua vaga gratuita</h3>
       <p class="sub">Vagas limitadas para a turma de Julho/2026.</p>
       <div class="field"><input type="text" name="firstname" placeholder="Digite seu primeiro nome"><div class="err">Informe seu nome</div></div>
@@ -298,7 +298,40 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <div class="mobcta"><a href="#inscricao" class="btn">Quero me inscrever gratuitamente</a></div>
 
 <script>
+// ===== CONFIG =====
+var LEADCONNECTOR_WEBHOOK = 'https://services.leadconnectorhq.com/hooks/sKutSDWwMzupKVPtTEGG/webhook-trigger/178dfc4c-2d72-4f32-923b-f27865c972d5';
+var LEAD_LIST = 'GAITEIRO MAO NA MASSA JULHO 2026';
+var TRACK_KEYS = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','fbclid','gclid'];
+
+// ===== CAPTURA E PERSISTENCIA DE TRACKING =====
+// Le os parametros da URL no carregamento e guarda em sessionStorage,
+// para nao perder o tracking caso o lead role/recarregue antes de enviar.
+function captureTracking(){
+  var qs=new URLSearchParams(window.location.search);
+  var store={};
+  try{ store=JSON.parse(sessionStorage.getItem('lead_tracking')||'{}'); }catch(e){ store={}; }
+  TRACK_KEYS.forEach(function(k){
+    var v=qs.get(k);
+    if(v){ store[k]=v; } // primeiro toque vence: so sobrescreve se vier valor novo na URL
+  });
+  // guarda tambem referrer e landing page de origem (apenas na 1a vez)
+  if(!store.landing_page){ store.landing_page=window.location.href.split('#')[0]; }
+  if(!store.referrer && document.referrer){ store.referrer=document.referrer; }
+  try{ sessionStorage.setItem('lead_tracking',JSON.stringify(store)); }catch(e){}
+  return store;
+}
+captureTracking();
+
+function getTracking(){
+  var store={};
+  try{ store=JSON.parse(sessionStorage.getItem('lead_tracking')||'{}'); }catch(e){ store={}; }
+  // garante todas as chaves no payload (vazio quando ausente)
+  TRACK_KEYS.forEach(function(k){ if(!(k in store)){ store[k]=''; } });
+  return store;
+}
+
 function isEmail(v){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);}
+
 function submitLead(btn){
   var card=btn.closest('.formcard');
   var name=card.querySelector('[name=firstname]');
@@ -311,27 +344,56 @@ function submitLead(btn){
     else{p[0].style.borderColor='#dde1e8';err.style.display='none';}
   });
   if(!ok){return;}
-  // dataLayer event for GTM / conversion tracking
-  window.dataLayer=window.dataLayer||[];
-  window.dataLayer.push({event:'lead_submit',lead_list:'GAITEIRO MAO NA MASSA JULHO 2026',form_location:card.id||'inline'});
 
-  // ===== INTEGRACAO ACTIVE CAMPAIGN =====
-  // Substitua a URL abaixo pela URL de action do seu formulario do Active Campaign
-  // (Active Campaign > Forms > seu form > Integrate > HTML). O campo da lista ja
-  // esta mapeado para: GAITEIRO MAO NA MASSA JULHO 2026
-  var AC_FORM_ACTION = ''; // ex: https://SEUACCOUNT.activehosted.com/proc.php
-  if(AC_FORM_ACTION){
-    var fd=new FormData();
-    fd.append('fullname',name.value.trim());
-    fd.append('email',email.value.trim());
-    fd.append('phone',phone.value.trim());
-    // adicione aqui os campos hidden do AC (u, f, id, etc.) conforme o embed
-    fetch(AC_FORM_ACTION,{method:'POST',body:fd,mode:'no-cors'});
-  }
-  btn.textContent='✓ Inscrição confirmada!';
-  btn.style.background='#1c8e4c';
+  var track=getTracking();
+
+  // ===== PAYLOAD ENVIADO AO WEBHOOK (LeadConnector / GoHighLevel) =====
+  var payload={
+    first_name: name.value.trim(),
+    name: name.value.trim(),
+    email: email.value.trim(),
+    phone: phone.value.trim(),
+    lead_list: LEAD_LIST,
+    form_location: card.id || 'inline',
+    page_url: window.location.href,
+    // tracking
+    utm_source: track.utm_source,
+    utm_medium: track.utm_medium,
+    utm_campaign: track.utm_campaign,
+    utm_content: track.utm_content,
+    utm_term: track.utm_term,
+    fbclid: track.fbclid,
+    gclid: track.gclid,
+    landing_page: track.landing_page||'',
+    referrer: track.referrer||'',
+    submitted_at: new Date().toISOString()
+  };
+
+  // dataLayer event para GTM / conversao (FB ADS, Google ADS)
+  window.dataLayer=window.dataLayer||[];
+  window.dataLayer.push({event:'lead_submit', lead_list:LEAD_LIST, form_location:payload.form_location,
+    utm_source:payload.utm_source, utm_campaign:payload.utm_campaign, fbclid:payload.fbclid, gclid:payload.gclid});
+
+  // envia ao webhook do LeadConnector
+  btn.textContent='Enviando...';
   btn.disabled=true;
-  setTimeout(function(){alert('Inscrição realizada! Conecte a URL do Active Campaign (AC_FORM_ACTION) ou seu redirecionamento de obrigado.');},100);
+  fetch(LEADCONNECTOR_WEBHOOK,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  }).then(function(){
+    finishLead(btn, card);
+  }).catch(function(){
+    // fallback no-cors (garante o disparo mesmo se houver bloqueio de CORS na resposta)
+    fetch(LEADCONNECTOR_WEBHOOK,{method:'POST',mode:'no-cors',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    finishLead(btn, card);
+  });
+}
+
+function finishLead(btn, card){
+  btn.textContent='\u2713 Inscri\u00e7\u00e3o confirmada!';
+  btn.style.background='#1c8e4c';
   // Opcional: redirecionar para pagina de obrigado
   // window.location.href='/obrigado';
 }
